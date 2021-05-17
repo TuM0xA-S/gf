@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -97,9 +98,19 @@ func main() {
 		flag.PrintDefaults()
 	}
 
-	fullPath := flag.Bool("f", false, "show full path")
-	followSymlinks := flag.Bool("s", false, "follow symlinks")
+	fullPath := flag.Bool("p", false, "show full path")
+	followSymlinks := flag.Bool("f", false, "follow symlinks")
+	quietMode := flag.Bool("q", false, "quiet mode")
+	matchCount := flag.Int("n", math.MaxInt32, "max results count")
 	flag.Parse()
+
+	if *matchCount == 0 {
+		return
+	}
+
+	if *quietMode {
+		log.SetOutput(ioutil.Discard)
+	}
 
 	args := flag.Args()
 	if len(args) == 0 {
@@ -124,7 +135,8 @@ func main() {
 		os.Exit(1)
 		return
 	}
-
+	var cntMutex sync.Mutex
+	currentCnt := 0
 	bfs(directories, func(path string, info os.FileInfo) error {
 		name := filepath.Base(path)
 		if *fullPath {
@@ -132,7 +144,17 @@ func main() {
 		}
 		if regex.MatchString(name) {
 			fmt.Println(path)
+			cntMutex.Lock()
+			currentCnt++
+			cntMutex.Unlock()
 		}
+
+		cntMutex.Lock()
+		if currentCnt >= *matchCount {
+			os.Exit(0)
+		}
+		cntMutex.Unlock()
+
 		if info.Mode().Type() == fs.ModeSymlink && !*followSymlinks {
 			return filepath.SkipDir
 		}
