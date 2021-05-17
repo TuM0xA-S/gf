@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sync"
 )
@@ -28,16 +28,18 @@ func stringChanAsArr(ch chan string, res *[]string, signal chan bool) {
 
 func bfsWorker(input chan string, output chan string, action func(path string, info os.FileInfo), wg *sync.WaitGroup) {
 	for path := range input {
-		info, err := os.Stat(path)
+		info, err := os.Lstat(path)
 		if err != nil {
-			log.Fatal(err)
+			fmt.Println(err)
+			continue
 		}
 		action(path, info)
 
 		if info.IsDir() {
 			files, err := ioutil.ReadDir(path)
 			if err != nil {
-				log.Fatal(err)
+				fmt.Println(err)
+				continue
 			}
 			for _, file := range files {
 				output <- filepath.Join(path, file.Name())
@@ -49,7 +51,7 @@ func bfsWorker(input chan string, output chan string, action func(path string, i
 
 func bfs(root string, action func(path string, info os.FileInfo)) {
 	curLvlData := []string{root}
-	threadCount := runtime.NumCPU()
+	threadCount := 2 * runtime.NumCPU()
 	for len(curLvlData) > 0 {
 		var wgWorkers sync.WaitGroup
 		curLvlChan := make(chan string, threadCount)
@@ -70,7 +72,20 @@ func bfs(root string, action func(path string, info os.FileInfo)) {
 }
 
 func main() {
+	args := os.Args[1:]
+	if len(args) == 0 {
+		fmt.Println("usage: gf <regex of filename> [<directory>]")
+		return
+	}
+	regex, err := regexp.Compile(args[0])
+	if err != nil {
+		fmt.Printf("when compiling regex: %v", err)
+		return
+	}
 	bfs("./", func(path string, info os.FileInfo) {
-		fmt.Println(path)
+		name := filepath.Base(path)
+		if regex.MatchString(name) {
+			fmt.Println(path)
+		}
 	})
 }
