@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -69,12 +70,12 @@ func bfsWorker(input chan string, output chan string, action bfsCallback, wg *sy
 
 func bfs(roots []string, action bfsCallback) {
 	curLvlData := roots
-	threadCount := 2 * runtime.NumCPU()
+	threadCount := 4 * runtime.NumCPU()
 	for len(curLvlData) > 0 {
 		var wgWorkers sync.WaitGroup
-		curLvlChan := make(chan string, threadCount)
+		curLvlChan := make(chan string, 16*threadCount)
 		stringArrAsChan(curLvlData, curLvlChan)
-		nextLvlChan := make(chan string, threadCount)
+		nextLvlChan := make(chan string, 16*threadCount)
 		for i := 0; i < threadCount; i++ {
 			wgWorkers.Add(1)
 			go bfsWorker(curLvlChan, nextLvlChan, action, &wgWorkers)
@@ -92,10 +93,13 @@ func bfs(roots []string, action bfsCallback) {
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("ERROR: ")
+	logWriter := bufio.NewWriter(os.Stderr)
+	log.SetOutput(logWriter)
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage of %s:\n", os.Args[0])
 		fmt.Fprintln(flag.CommandLine.Output(), "gf [<options>...] <pattern> [<directores>...]")
 		flag.PrintDefaults()
+		fmt.Fprintln(flag.CommandLine.Output(), "  -h\tshow this help")
 	}
 
 	fullPath := flag.Bool("p", false, "show full path")
@@ -135,25 +139,27 @@ func main() {
 		os.Exit(1)
 		return
 	}
-	var cntMutex sync.Mutex
-	currentCnt := 0
+
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	output := make(chan string, 1024)
+	signal := printer(output, *matchCount)
+	go func() {
+		<-signal
+		os.Exit(0)
+	}()
 	bfs(directories, func(path string, info os.FileInfo) error {
 		name := filepath.Base(path)
 		if *fullPath {
 			path = filepath.Join(cwd, path)
 		}
 		if regex.MatchString(name) {
-			fmt.Println(path)
-			cntMutex.Lock()
-			currentCnt++
-			cntMutex.Unlock()
+			output <- path
 		}
-
-		cntMutex.Lock()
-		if currentCnt >= *matchCount {
-			os.Exit(0)
-		}
-		cntMutex.Unlock()
 
 		if info.Mode().Type() == fs.ModeSymlink && !*followSymlinks {
 			return filepath.SkipDir
@@ -161,4 +167,26 @@ func main() {
 
 		return nil
 	})
+	close(output)
+	<-signal
+}
+
+func printer(ch chan string, count int) chan bool {
+	writer := bufio.NewWriter(os.Stdout)
+	signal := make(chan bool)
+	currentCnt := 0
+	go func() {
+		defer func() {
+			writer.Flush()
+			signal <- true
+		}()
+		for str := range ch {
+			writer.WriteString(str + "\n")
+			currentCnt++
+			if currentCnt >= count {
+				return
+			}
+		}
+	}()
+	return signal
 }
